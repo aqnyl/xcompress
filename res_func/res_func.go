@@ -22,6 +22,7 @@ type TomlConfig struct {
 	Passwd         string   `toml:"passwd"`
 	ResticHomePath string   `toml:"restic_home_path"`
 	Merge          int      `toml:"merge"`
+	MergeName      string   `toml:"merge_name"`
 }
 
 // 添加全局配置结构体
@@ -69,6 +70,7 @@ func Toml_parse(filePath string) (bool, interface{}) {
 			Passwd:         cfg.Passwd,
 			ResticHomePath: cfg.ResticHomePath,
 			Merge:          cfg.Merge,
+			MergeName:      cfg.MergeName,
 		}
 
 		// 合并全局配置（修改判断逻辑）
@@ -93,6 +95,11 @@ func Toml_parse(filePath string) (bool, interface{}) {
 			} else {
 				finalCfg.Merge = 0
 			}
+		}
+
+		// 设置 merge_name 默认值
+		if finalCfg.MergeName == "" {
+			finalCfg.MergeName = "merge_path"
 		}
 
 		// 验证必填字段

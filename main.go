@@ -39,7 +39,7 @@ func main() {
 				// 处理合并备份逻辑
 				if config.Merge == 1 {
 					// 创建固定名称的合并目录
-					mergePath := filepath.Join(currentDir, "merge_path")
+					mergePath := filepath.Join(currentDir, config.MergeName)
 
 					// 删除已存在的目录（如果存在）
 					if err := os.RemoveAll(mergePath); err != nil {
