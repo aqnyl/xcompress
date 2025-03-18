@@ -24,9 +24,18 @@ type TomlConfig struct {
 	Merge          int      `toml:"merge"`
 }
 
+// 添加全局配置结构体
+type GlobalConfig struct {
+	Merge          int    `toml:"merge"`
+	Passwd         string `toml:"passwd"`
+	ResticHomePath string `toml:"restic_home_path"`
+	Tag            string `toml:"tag"`
+}
+
 // 修改顶层配置结构
 type TomlConfigFile struct {
-	Configs map[string]TomlConfig `toml:"config"` // 添加新的顶层配置结构
+	Global  GlobalConfig          `toml:"global_config"`
+	Configs map[string]TomlConfig `toml:"config"`
 }
 
 // Toml_parse TOML配置文件解析与验证函数
@@ -47,43 +56,86 @@ func Toml_parse(filePath string) (bool, interface{}) {
 		return false, fmt.Sprintf("TOML解析错误: %v", err)
 	}
 
-	// 遍历所有配置项（改为使用map的遍历方式）
+	// 创建最终配置集合
+	finalConfigs := make(map[string]TomlConfig)
+
+	// 遍历所有配置项
 	for configName, cfg := range configFile.Configs {
-		// 验证必填字段（将i+1改为配置项名称）
-		if cfg.Name == "" {
+		// 合并配置（局部配置优先）
+		finalCfg := TomlConfig{
+			Name:           cfg.Name,
+			Path:           cfg.Path,
+			Tag:            cfg.Tag,
+			Passwd:         cfg.Passwd,
+			ResticHomePath: cfg.ResticHomePath,
+			Merge:          cfg.Merge,
+		}
+
+		// 合并全局配置（修改判断逻辑）
+		if finalCfg.Passwd == "" {
+			finalCfg.Passwd = configFile.Global.Passwd
+		}
+		if finalCfg.ResticHomePath == "" {
+			finalCfg.ResticHomePath = configFile.Global.ResticHomePath
+		}
+		if finalCfg.Tag == "" {
+			finalCfg.Tag = configFile.Global.Tag
+		}
+
+		// 修改merge字段合并逻辑（新增智能默认值）
+		if finalCfg.Merge == 0 { // 配置项未设置时使用全局配置
+			finalCfg.Merge = configFile.Global.Merge
+		}
+		// 当全局和配置项都未设置时，根据path数量设置默认值
+		if finalCfg.Merge == 0 {
+			if len(finalCfg.Path) > 1 {
+				finalCfg.Merge = 1
+			} else {
+				finalCfg.Merge = 0
+			}
+		}
+
+		// 验证必填字段
+		if finalCfg.Name == "" {
 			errorMessages += fmt.Sprintf("配置项[%s]: name字段缺失\n", configName)
 		}
-		if len(cfg.Path) == 0 {
+		if len(finalCfg.Path) == 0 {
 			errorMessages += fmt.Sprintf("配置项[%s]: path字段缺失\n", configName)
 		}
-		if cfg.Passwd == "" {
-			errorMessages += fmt.Sprintf("配置项[%s]: passwd字段缺失\n", configName)
+		if finalCfg.Passwd == "" {
+			errorMessages += fmt.Sprintf("配置项[%s]: passwd字段缺失（全局配置也未设置）\n", configName)
 		}
-		if cfg.ResticHomePath == "" {
-			errorMessages += fmt.Sprintf("配置项[%s]: restic_home_path字段缺失\n", configName)
+		if finalCfg.ResticHomePath == "" {
+			errorMessages += fmt.Sprintf("配置项[%s]: restic_home_path字段缺失（全局配置也未设置）\n", configName)
 		}
 
 		// 验证路径存在性
-		for _, p := range cfg.Path {
+		for _, p := range finalCfg.Path {
 			if !pathExists(p) {
 				errorMessages += fmt.Sprintf("配置项[%s]: 路径不存在 - %s\n", configName, p)
 			}
 		}
-		if !pathExists(cfg.ResticHomePath) {
-			errorMessages += fmt.Sprintf("配置项[%s]: restic仓库路径不存在 - %s\n", configName, cfg.ResticHomePath)
+		fmt.Println("finalCfg.ResticHomePath: ----------", finalCfg.ResticHomePath)
+		if !pathExists(finalCfg.ResticHomePath) {
+			errorMessages += fmt.Sprintf("配置项[%s]: restic仓库路径不存在 - %s\n", configName, finalCfg.ResticHomePath)
 		}
 
 		// 新增 merge 字段验证
-		if cfg.Merge != 0 && cfg.Merge != 1 {
+		if finalCfg.Merge != 0 && finalCfg.Merge != 1 {
 			errorMessages += fmt.Sprintf("配置项[%s]: merge字段必须为0或1\n", configName)
 		}
+		fmt.Println("finalCfg: ----------", finalCfg)
+
+		// 将合并后的配置存入最终集合
+		finalConfigs[configName] = finalCfg
 	}
 
 	if errorMessages != "" {
 		return false, errorMessages
 	}
-	// 验证通过时返回配置字典
-	return true, configFile.Configs
+	// 返回合并后的最终配置
+	fmt.Println("Final configs: ----------", finalConfigs)
+	return true, finalConfigs
 }
 
 // pathExists 路径存在性检查函数
@@ -219,6 +271,91 @@ func ResBackup(resticPath, backupPath, passwd string, packSize int, compression,
 
 	fmt.Printf("Starting backup from %s to %s...\n", backupPath, resticPath)
 	return ResticBackup(resticPath, backupPath, passwd, packSize, compression, tag, skip)
+}
+
+// ResClearFolder 清理restic仓库的data目录空文件夹
+// 参数:
+//   - path: restic仓库根路径
+//
+// 返回值:
+//   - bool: 操作是否成功
+//   - string: 成功时返回删除结果（格式："清除成功，共删除x个空文件夹，文件夹名分别是：name1，name2..."），
+//     包含错误信息时会追加在成功信息之后
+//
+// 功能说明:
+//   - 自动跳过非空目录
+//   - 同时返回成功删除列表和错误信息
+func ResClearFolder(path string) (bool, string) {
+	dataDir := filepath.Join(path, "data")
+	var deletedDirs []string
+	var errorMsgs []string
+
+	// 检查data目录是否存在
+	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
+		return false, fmt.Sprintf("路径 %s 不是有效的restic仓库（缺少data目录）", path)
+	}
+
+	// 读取data目录下的所有子目录
+	dirs, err := os.ReadDir(dataDir)
+	if err != nil {
+		return false, fmt.Sprintf("读取目录失败: %v", err)
+	}
+
+	// 遍历所有子目录
+	for _, dir := range dirs {
+		if dir.IsDir() {
+			dirPath := filepath.Join(dataDir, dir.Name())
+
+			// 检查是否为空目录
+			isEmpty, err := isDirEmpty(dirPath)
+			if err != nil {
+				errorMsgs = append(errorMsgs, fmt.Sprintf("检查目录 %s 失败: %v", dir.Name(), err))
+				continue
+			}
+			if isEmpty {
+				// 删除空目录
+				if err := os.Remove(dirPath); err == nil {
+					deletedDirs = append(deletedDirs, dir.Name())
+				} else {
+					errorMsgs = append(errorMsgs, fmt.Sprintf("删除失败 %s: %v", dir.Name(), err))
+				}
+			}
+		}
+	}
+
+	// 构建结果信息
+	var result strings.Builder
+	if len(deletedDirs) > 0 {
+		result.WriteString(fmt.Sprintf("清除成功，共删除%d个空文件夹，文件夹名分别是：%s",
+			len(deletedDirs), strings.Join(deletedDirs, "， ")))
+	}
+	if len(errorMsgs) > 0 {
+		if result.Len() > 0 {
+			result.WriteString("\n")
+		}
+		result.WriteString(strings.Join(errorMsgs, "\n"))
+	}
+
+	if result.Len() == 0 {
+		return true, "未发现需要清理的空目录"
+	}
+	return true, result.String()
+}
+
+// 新增辅助函数检查目录是否为空
+func isDirEmpty(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	// 读取最多1个条目
+	_, err = f.Readdir(1)
+	if err == io.EOF {
+		return true, nil // 目录为空
+	}
+	return false, err // 目录非空或读取错误
 }
 
 // ResticRestore 执行恢复操作

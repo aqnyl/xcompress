@@ -1,19 +1,19 @@
+[global_config]
+passwd="123456"
+restic_home_path="D:\\work_folder\\project_code\\restic_compress\\xcompress_cmd\\test_dir\\restic_backup_dir"
+tag="test"
+
 [config]
 [config.one]
 name="one_res"
-path=["D:\\work_folder\\tools\\automatic\\backup_file\\test_dir\\test_to_backup\\one_folder"]
-tag="test"
-passwd="123456"
-restic_home_path="D:\\work_folder\\tools\\automatic\\backup_file\\test_dir\\restic_backup_dir"
+path=["D:\\work_folder\\project_code\\restic_compress\\xcompress_cmd\\test_dir\\test_to_backup\\one_folder"]
+tag="eihei"
 merge=1
 
 [config.two]
 name="two_res"
 path=[
-    "D:\\work_folder\\tools\\automatic\\backup_file\\test_dir\\test_to_backup\\two_folder\\two",
-    "D:\\work_folder\\tools\\automatic\\backup_file\\test_dir\\test_to_backup\\two_folder\\one"
+    "D:\\work_folder\\project_code\\restic_compress\\xcompress_cmd\\test_dir\\test_to_backup\\two_folder\\one",
+    "D:\\work_folder\\project_code\\restic_compress\\xcompress_cmd\\test_dir\\test_to_backup\\two_folder\\two"
 ]
-tag="test"
-passwd="123456"
-restic_home_path="D:\\work_folder\\tools\\automatic\\backup_file\\test_dir\\restic_backup_dir"
-merge=1
+passwd="233"

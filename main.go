@@ -30,25 +30,46 @@ func main() {
 		// 数据类型：map[string]res_func.TomlConfig
 		// map[one:{one_res [D:\work_folder\tools\automatic\backup_file\test_dir\test_to_backup\one_folder] test 123456 D:\work_folder\tools\automatic\backup_file\test_dir\restic_backup_dir} two:{two_res [D:\work_folder\tools\automatic\backup_file\test_dir\test_to_backup\two_folder\two D:\work_folder\tools\automatic\backup_file\test_dir\test_to_backup\two_folder\one] test 123456 D:\work_folder\tools\automatic\backup_file\test_dir\restic_backup_dir}]
 		fmt.Println("toml 文件解析成功")
+		fmt.Println("msg 格式: ", msg)
+
 		if configs, ok := msg.(map[string]res_func.TomlConfig); ok {
 			for _, config := range configs {
 				fmt.Printf("\n正在处理配置项: %s\n", config.Name)
 
 				// 处理合并备份逻辑
 				if config.Merge == 1 {
-					// 创建临时目录
-					tempDir, err := os.MkdirTemp(currentDir, "temporary_")
-					if err != nil {
-						fmt.Printf("创建临时目录失败: %v\n", err)
+					// 创建固定名称的合并目录
+					mergePath := filepath.Join(currentDir, "merge_path")
+
+					// 删除已存在的目录（如果存在）
+					if err := os.RemoveAll(mergePath); err != nil {
+						fmt.Printf("清理旧目录失败: %v\n", err)
 						continue
 					}
-					defer os.RemoveAll(tempDir)
 
-					// 复制所有路径到临时目录
+					// 创建新目录
+					if err := os.Mkdir(mergePath, 0755); err != nil {
+						fmt.Printf("创建合并目录失败: %v\n", err)
+						continue
+					}
+					defer os.RemoveAll(mergePath) // 确保最终删除
+
+					// 复制所有路径到合并目录的子目录
 					for _, srcPath := range config.Path {
-						cmd := exec.Command("xcopy", srcPath, tempDir, "/E", "/I", "/H")
+						// 获取源路径的最后一级目录名
+						baseName := filepath.Base(srcPath)
+						targetPath := filepath.Join(mergePath, baseName)
+
+						// 创建目标子目录
+						if err := os.MkdirAll(targetPath, 0755); err != nil {
+							fmt.Printf("创建子目录失败: %v\n", err)
+							continue
+						}
+
+						// 复制到子目录
+						cmd := exec.Command("xcopy", srcPath, targetPath, "/E", "/I", "/H")
 						if err := cmd.Run(); err != nil {
-							fmt.Printf("复制文件失败: %v\n", err)
+							fmt.Printf("复制文件到 %s 失败: %v\n", baseName, err)
 							continue
 						}
 					}
@@ -56,7 +77,7 @@ func main() {
 					// 执行合并备份
 					success, output := res_func.ResBackup(
 						filepath.Join(config.ResticHomePath, config.Name),
-						tempDir,
+						mergePath,
 						config.Passwd,
 						128,
 						"auto",
@@ -66,6 +87,15 @@ func main() {
 					fmt.Println(output)
 					if !success {
 						fmt.Println("合并备份失败")
+					} else {
+						// 备份成功后清理空目录
+						clearSuccess, clearOutput := res_func.ResClearFolder(
+							filepath.Join(config.ResticHomePath, config.Name),
+						)
+						fmt.Println("空目录清理结果:", clearOutput)
+						if !clearSuccess {
+							fmt.Println("警告：仓库清理未完全成功")
+						}
 					}
 				} else {
 					// 单独备份每个路径
@@ -82,6 +112,15 @@ func main() {
 						fmt.Println(output)
 						if !success {
 							fmt.Printf("路径 %s 备份失败\n", path)
+						} else {
+							// 备份成功后清理空目录
+							clearSuccess, clearOutput := res_func.ResClearFolder(
+								filepath.Join(config.ResticHomePath, config.Name),
+							)
+							fmt.Println("空目录清理结果:", clearOutput)
+							if !clearSuccess {
+								fmt.Println("警告：仓库清理未完全成功")
+							}
 						}
 					}
 				}
