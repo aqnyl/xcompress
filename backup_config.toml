@@ -1,0 +1,19 @@
+[config]
+[config.one]
+name="one_res"
+path=["D:\\work_folder\\tools\\automatic\\backup_file\\test_dir\\test_to_backup\\one_folder"]
+tag="test"
+passwd="123456"
+restic_home_path="D:\\work_folder\\tools\\automatic\\backup_file\\test_dir\\restic_backup_dir"
+merge=1
+
+[config.two]
+name="two_res"
+path=[
+    "D:\\work_folder\\tools\\automatic\\backup_file\\test_dir\\test_to_backup\\two_folder\\two",
+    "D:\\work_folder\\tools\\automatic\\backup_file\\test_dir\\test_to_backup\\two_folder\\one"
+]
+tag="test"
+passwd="123456"
+restic_home_path="D:\\work_folder\\tools\\automatic\\backup_file\\test_dir\\restic_backup_dir"
+merge=1
