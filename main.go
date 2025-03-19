@@ -1,26 +1,52 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"xcompress_cmd/res_func"
 )
 
 func main() {
-	exePath, err := os.Executable()
+	var toml_path string
+	exePath, err := os.Executable() // 获取可执行文件路径
+	exeDir := filepath.Dir(exePath) // 获取可执行文件所在目录
 	if err != nil {
-		// 处理可执行文件路径获取错误
-		exePath = "." // 失败时使用当前目录
+		// 获取当前工作目录作为备用方案
+		currentDir, _ := os.Getwd()
+		exePath = currentDir
 	}
 
-	// 优先使用当前工作目录
-	currentDir, err := os.Getwd()
-	if err != nil {
-		currentDir = filepath.Dir(exePath) // 回退到可执行文件目录
+	// 修改命令行参数处理逻辑
+	if len(os.Args) > 1 {
+		argPath := os.Args[1]
+		if strings.HasSuffix(argPath, ".toml") {
+			toml_path = argPath
+		} else {
+			// 检查路径是否存在
+			if pathExists(argPath) {
+				success, result := InteractionBackup(argPath, exeDir)
+				if success {
+					fmt.Println("\n备份结果:", result)
+				} else {
+					fmt.Println("错误：指定的路径不存在")
+				}
+			} else {
+				fmt.Println("错误：指定的路径不存在")
+			}
+			// 添加退出等待
+			fmt.Print("按任意键退出...")
+			bufio.NewReader(os.Stdin).ReadBytes('\n')
+			return // 提前退出主函数
+		}
+	} else {
+		// 当没有参数时才设置默认路径
+		currentDir, _ := os.Getwd()
+		toml_path = filepath.Join(currentDir, "backup_config.toml")
 	}
-	toml_path := filepath.Join(currentDir, "backup_config.toml")
 	fmt.Println("toml_path: ", toml_path)
 	var result bool
 	var msg interface{}
@@ -39,7 +65,7 @@ func main() {
 				// 处理合并备份逻辑
 				if config.Merge == 1 {
 					// 创建固定名称的合并目录
-					mergePath := filepath.Join(currentDir, config.MergeName)
+					mergePath := filepath.Join(exePath, config.MergeName)
 
 					// 删除已存在的目录（如果存在）
 					if err := os.RemoveAll(mergePath); err != nil {
@@ -127,13 +153,96 @@ func main() {
 			}
 		}
 	} else {
-		fmt.Println("toml 文件解析失败")
-		fmt.Println(msg)
-		fmt.Println("按任意键退出程序...")
-		fmt.Scanln() // 等待用户输入
-		return
+		// 当没有toml文件且无参数时进入交互模式
+		if len(os.Args) == 1 && !pathExists(toml_path) {
+			fmt.Println("未找到配置文件，进入交互模式")
+			var backupPath string
+			fmt.Print("请输入要备份的路径: ")
+			fmt.Scanln(&backupPath)
+			success, result := InteractionBackup(backupPath, exeDir)
+			if success {
+				fmt.Println("\n备份结果:", result)
+			} else {
+				fmt.Println("错误：指定的路径不存在")
+			}
+			// 添加退出等待
+			fmt.Print("按任意键退出...")
+			bufio.NewReader(os.Stdin).ReadBytes('\n')
+			return // 提前退出主函数
+		}
 	}
 
+	// 确保最后的等待输入始终执行
 	fmt.Print("备份操作完成，按任意键退出...")
-	fmt.Scanln() // 等待用户输入
+	bufio.NewReader(os.Stdin).ReadBytes('\n')
+}
+
+// InteractionBackup 处理交互式备份流程
+// 参数:
+//
+//	backupPath string - 需要备份的原始路径
+//	exeDir string - 可执行文件所在目录
+//
+// 返回值:
+//
+//	bool - 备份是否成功
+//	string - 备份结果描述信息
+//
+// 功能:
+//  1. 验证备份路径有效性
+//  2. 通过命令行交互获取备份名称和密码
+//  3. 自动生成仓库路径
+//  4. 调用底层备份函数执行实际备份操作
+func InteractionBackup(backupPath string, exeDir string) (bool, string) {
+	// 验证路径存在性
+	if !pathExists(backupPath) {
+		return false, "路径不存在"
+	}
+	fmt.Println("backupPath: ", backupPath)
+
+	reader := bufio.NewReader(os.Stdin)
+
+	// 获取备份名称
+	fmt.Print("请输入备份名称: ")
+	backupName, _ := reader.ReadString('\n')   // 读取输入
+	backupName = strings.TrimSpace(backupName) // 去除空格
+
+	// 获取密码
+	fmt.Print("请输入备份密码: ")
+	passwd, _ := reader.ReadString('\n')
+	passwd = strings.TrimSpace(passwd)
+
+	// 修改仓库路径生成逻辑
+	// 直接使用可执行文件所在目录（不再取父目录）
+	resticPath := filepath.Join(exeDir, backupName)
+	fmt.Println("resticPath: ", resticPath)
+
+	fmt.Printf("\n正在备份 %s 到 %s...\n", backupPath, resticPath)
+
+	// 调用备份函数时移除直接退出逻辑
+	success, result := res_func.ResBackup(
+		resticPath,
+		backupPath,
+		passwd,
+		128,    // 固定packSize
+		"auto", // 固定压缩模式
+		"",     // 无tag
+		false,  // 不跳过未修改文件
+	)
+
+	// 返回结果但不退出程序
+	return success, result
+}
+
+// pathExists 检查指定路径是否存在
+// 参数:
+//
+//	path string - 需要检查的文件/目录路径
+//
+// 返回值:
+//
+//	bool - 路径存在返回true，否则返回false
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return !os.IsNotExist(err)
 }
