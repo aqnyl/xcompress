@@ -11,13 +11,29 @@ import (
 )
 
 func main() {
+	fmt.Println("xcompress 当前版本 v1.1")
 	var toml_path string
+	var restic_exe_path string
 	exePath, err := os.Executable() // 获取可执行文件路径
 	exeDir := filepath.Dir(exePath) // 获取可执行文件所在目录
 	if err != nil {
-		// 获取当前工作目录作为备用方案
-		currentDir, _ := os.Getwd()
-		exePath = currentDir
+		fmt.Println("获取可执行文件路径失败:", err)
+		fmt.Println("请将xcompress.exe放在工作目录下运行")
+		fmt.Println("按任意键退出...")
+		bufio.NewReader(os.Stdin).ReadBytes('\n')
+		os.Exit(1)
+	}
+	resticPath_result := res_func.CheckResticPath()
+	switch resticPath_result {
+	case 0:
+		fmt.Println("未找到可用restic")
+		os.Exit(1)
+	case 1:
+		fmt.Println("系统PATH中找到restic，使用系统restic")
+		restic_exe_path = "restic"
+	case 2:
+		fmt.Println("当前程序目录找到restic.exe，使用当前程序restic")
+		restic_exe_path = filepath.Join(exeDir, "restic.exe")
 	}
 
 	// 修改命令行参数处理逻辑
@@ -28,7 +44,7 @@ func main() {
 		} else {
 			// 检查路径是否存在
 			if pathExists(argPath) {
-				success, result := InteractionBackup(argPath, exeDir)
+				success, result := InteractionBackup(restic_exe_path, argPath, exeDir)
 				if success {
 					fmt.Println("\n备份结果:", result)
 				} else {
@@ -65,7 +81,7 @@ func main() {
 				// 处理合并备份逻辑
 				if config.Merge == 1 {
 					// 创建固定名称的合并目录
-					mergePath := filepath.Join(exePath, config.MergeName)
+					mergePath := filepath.Join(exeDir, config.MergeName)
 
 					// 删除已存在的目录（如果存在）
 					if err := os.RemoveAll(mergePath); err != nil {
@@ -102,6 +118,7 @@ func main() {
 
 					// 执行合并备份
 					success, output := res_func.ResBackup(
+						restic_exe_path,
 						filepath.Join(config.ResticHomePath, config.Name),
 						mergePath,
 						config.Passwd,
@@ -127,6 +144,7 @@ func main() {
 					// 单独备份每个路径
 					for _, path := range config.Path {
 						success, output := res_func.ResBackup(
+							restic_exe_path,
 							filepath.Join(config.ResticHomePath, config.Name),
 							path,
 							config.Passwd,
@@ -159,7 +177,7 @@ func main() {
 			var backupPath string
 			fmt.Print("请输入要备份的路径: ")
 			fmt.Scanln(&backupPath)
-			success, result := InteractionBackup(backupPath, exeDir)
+			success, result := InteractionBackup(restic_exe_path, backupPath, exeDir)
 			if success {
 				fmt.Println("\n备份结果:", result)
 			} else {
@@ -180,6 +198,7 @@ func main() {
 // InteractionBackup 处理交互式备份流程
 // 参数:
 //
+//	restic_exe_path string - restic 可执行文件路径
 //	backupPath string - 需要备份的原始路径
 //	exeDir string - 可执行文件所在目录
 //
@@ -193,7 +212,7 @@ func main() {
 //  2. 通过命令行交互获取备份名称和密码
 //  3. 自动生成仓库路径
 //  4. 调用底层备份函数执行实际备份操作
-func InteractionBackup(backupPath string, exeDir string) (bool, string) {
+func InteractionBackup(restic_exe_path, backupPath string, exeDir string) (bool, string) {
 	// 验证路径存在性
 	if !pathExists(backupPath) {
 		return false, "路径不存在"
@@ -221,6 +240,7 @@ func InteractionBackup(backupPath string, exeDir string) (bool, string) {
 
 	// 调用备份函数时移除直接退出逻辑
 	success, result := res_func.ResBackup(
+		restic_exe_path,
 		resticPath,
 		backupPath,
 		passwd,

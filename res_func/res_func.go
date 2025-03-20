@@ -165,14 +165,15 @@ func pathExists(path string) bool {
 
 // ResticInit 初始化 restic 仓库
 // 参数:
+//   - restic_exe_path: restic 可执行文件路径
 //   - resticPath: restic 仓库路径
 //   - passwd: 仓库加密密码
 //
 // 返回值:
 //   - bool: 操作是否成功
 //   - string: 成功时返回输出信息，失败时返回错误信息
-func ResticInit(resticPath, passwd string) (bool, string) {
-	cmd := exec.Command("restic", "init", "-r", resticPath, "--repository-version", "2")
+func ResticInit(restic_exe_path, resticPath, passwd string) (bool, string) {
+	cmd := exec.Command(restic_exe_path, "init", "-r", resticPath, "--repository-version", "2")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return false, fmt.Sprintf("Error creating stdin pipe: %v", err)
@@ -196,6 +197,7 @@ func ResticInit(resticPath, passwd string) (bool, string) {
 
 // ResticBackup 执行备份操作
 // 参数:
+//   - restic_exe_path: restic 可执行文件路径
 //   - resticPath: restic 仓库路径
 //   - backupPath: 需要备份的路径
 //   - passwd: 仓库加密密码
@@ -207,7 +209,7 @@ func ResticInit(resticPath, passwd string) (bool, string) {
 // 返回值:
 //   - bool: 操作是否成功
 //   - string: 成功时返回输出信息，失败时返回错误信息
-func ResticBackup(resticPath, backupPath, passwd string, packSize int, compression, tag string, skip bool) (bool, string) {
+func ResticBackup(restic_exe_path, resticPath, backupPath, passwd string, packSize int, compression, tag string, skip bool) (bool, string) {
 	args := []string{"-r", resticPath, "backup", backupPath, "--no-scan"}
 
 	if packSize >= 1 && packSize <= 128 {
@@ -226,7 +228,7 @@ func ResticBackup(resticPath, backupPath, passwd string, packSize int, compressi
 		args = append(args, "--skip-if-unchanged")
 	}
 
-	cmd := exec.Command("restic", args...)
+	cmd := exec.Command(restic_exe_path, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return false, fmt.Sprintf("Error creating stdin pipe: %v", err)
@@ -250,6 +252,7 @@ func ResticBackup(resticPath, backupPath, passwd string, packSize int, compressi
 
 // ResBackup 检查并执行备份
 // 参数:
+//   - restic_exe_path: restic 可执行文件路径
 //   - resticPath: restic 仓库路径
 //   - backupPath: 需要备份的路径
 //   - passwd: 仓库加密密码
@@ -265,10 +268,10 @@ func ResticBackup(resticPath, backupPath, passwd string, packSize int, compressi
 // 功能说明:
 //  1. 检查仓库是否存在，不存在则自动初始化
 //  2. 执行实际备份操作
-func ResBackup(resticPath, backupPath, passwd string, packSize int, compression, tag string, skip bool) (bool, string) {
+func ResBackup(restic_exe_path, resticPath, backupPath, passwd string, packSize int, compression, tag string, skip bool) (bool, string) {
 	if _, err := os.Stat(resticPath); os.IsNotExist(err) {
 		fmt.Printf("Restic repository %s not found, initializing...\n", resticPath)
-		success, output := ResticInit(resticPath, passwd)
+		success, output := ResticInit(restic_exe_path, resticPath, passwd)
 		if !success {
 			return false, fmt.Sprintf("Init failed: %s", output)
 		}
@@ -277,7 +280,7 @@ func ResBackup(resticPath, backupPath, passwd string, packSize int, compression,
 	}
 
 	fmt.Printf("Starting backup from %s to %s...\n", backupPath, resticPath)
-	return ResticBackup(resticPath, backupPath, passwd, packSize, compression, tag, skip)
+	return ResticBackup(restic_exe_path, resticPath, backupPath, passwd, packSize, compression, tag, skip)
 }
 
 // ResClearFolder 清理restic仓库的data目录空文件夹
@@ -466,4 +469,34 @@ func ResticRestore(resticPath, outputPath, passwd, snapshotID string) (bool, str
 		return true, string(outputRestore)
 	}
 	return false, string(outputRestore)
+}
+
+// CheckResticPath 检查系统中 restic 的可用性
+// 返回值:
+// - 1: 系统PATH中找到restic
+// - 2: 当前程序目录找到restic.exe
+// - 0: 未找到可用restic
+func CheckResticPath() int {
+	// 1. 检查系统PATH中的restic
+	if path, err := exec.LookPath("restic"); err == nil {
+		// 验证确实是restic程序
+		cmd := exec.Command(path, "version")
+		output, err := cmd.CombinedOutput()
+		if err == nil && strings.Contains(string(output), "restic") {
+			return 1
+		}
+	}
+
+	// 2. 检查当前程序目录下的restic.exe
+	exePath, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exePath)
+		resticExePath := filepath.Join(exeDir, "restic.exe")
+		if _, err := os.Stat(resticExePath); err == nil {
+			return 2
+		}
+	}
+
+	// 3. 未找到任何可用版本
+	return 0
 }
