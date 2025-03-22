@@ -47,7 +47,17 @@ type TomlConfigFile struct {
 // 返回值:
 //
 //	bool - 验证是否通过(true表示验证成功)
-//	interface{} - 验证成功时返回配置字典，失败时返回错误信息字符串
+//	interface{} - 成功时返回 map[string]TomlConfig 字典，失败时返回错误信息字符串
+//	            返回字典格式说明:
+//	            键: 配置项名称（config文件中的键名）
+//	            值: TomlConfig 结构体，包含以下字段:
+//	                Name: 配置名称 (string)
+//	                Path: 备份路径列表 ([]string)
+//	                Tag: 备份标签 (string)
+//	                Passwd: 仓库密码 (string)
+//	                ResticHomePath: 仓库路径 (string)
+//	                Merge: 路径合并模式 0-不合并 1-合并 (int)
+//	                MergeName: 合并后的路径名称 (string)
 func Toml_parse(filePath string) (bool, interface{}) {
 	var configFile TomlConfigFile
 	var errorMessages string

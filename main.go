@@ -11,6 +11,7 @@ import (
 )
 
 func main() {
+	// 检查电脑是否有 restic 软件
 	fmt.Println("xcompress 当前版本 v1.15")
 	var toml_path string
 	var restic_exe_path string
@@ -36,8 +37,10 @@ func main() {
 		restic_exe_path = filepath.Join(exeDir, "restic.exe")
 	}
 
-	// 修改命令行参数处理逻辑
+	// 解析程序所传入的命令行参数，如果为toml文件，则使用该文件作为toml文件路径
+	// 如果为路径，则直接备份该路径
 	if len(os.Args) > 1 {
+		// 启动程序传入层数，则使用传入的层数
 		argPath := os.Args[1]
 		if strings.HasSuffix(argPath, ".toml") {
 			toml_path = argPath
@@ -45,10 +48,12 @@ func main() {
 			// 检查路径是否存在
 			if pathExists(argPath) {
 				success, result := InteractionBackup(restic_exe_path, argPath, exeDir)
-				if success {
+				switch success {
+				case true:
 					fmt.Println("\n备份结果:", result)
-				} else {
-					fmt.Println("错误：指定的路径不存在")
+				case false:
+					fmt.Println("错误：备份失败，错误信息：")
+					fmt.Println(result)
 				}
 			} else {
 				fmt.Println("错误：指定的路径不存在")
@@ -59,7 +64,7 @@ func main() {
 			return // 提前退出主函数
 		}
 	} else {
-		// 当没有参数时才设置默认路径
+		// 启动程序没有传入层数，则使用默认路径
 		currentDir, _ := os.Getwd()
 		toml_path = filepath.Join(currentDir, "backup_config.toml")
 	}
@@ -67,6 +72,16 @@ func main() {
 	var result bool
 	var msg interface{}
 	result, msg = res_func.Toml_parse(toml_path)
+	// 返回字典格式说明:
+	// 键: 配置项名称（config文件中的键名）
+	// 值: TomlConfig 结构体，包含以下字段:
+	// Name: 配置名称 (string)
+	// Path: 备份路径列表 ([]string)
+	// Tag: 备份标签 (string)
+	// Passwd: 仓库密码 (string)
+	// ResticHomePath: 仓库路径 (string)
+	// Merge: 路径合并模式 0-不合并 1-合并 (int)
+	// MergeName: 合并后的路径名称 (string)
 	if result {
 		// example
 		// 数据类型：map[string]res_func.TomlConfig
@@ -243,7 +258,7 @@ func InteractionBackup(restic_exe_path, backupPath string, exeDir string) (bool,
 	// 调用备份函数时移除直接退出逻辑
 	success, result := res_func.ResBackup(
 		restic_exe_path,
-		resticPath,
+		backupName,
 		backupPath,
 		passwd,
 		128,    // 固定packSize
