@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	fmt.Println("xcompress 当前版本 v1.1")
+	fmt.Println("xcompress 当前版本 v1.15")
 	var toml_path string
 	var restic_exe_path string
 	exePath, err := os.Executable() // 获取可执行文件路径
@@ -127,6 +127,7 @@ func main() {
 						config.Tag,
 						true,
 					)
+					res_func.ResClearFolder(filepath.Join(config.ResticHomePath, config.Name)) // 清理空目录
 					fmt.Println(output)
 					if !success {
 						fmt.Println("合并备份失败")
@@ -153,6 +154,7 @@ func main() {
 							config.Tag,
 							true,
 						)
+						res_func.ResClearFolder(filepath.Join(config.ResticHomePath, config.Name)) // 清理空目录
 						fmt.Println(output)
 						if !success {
 							fmt.Printf("路径 %s 备份失败\n", path)
@@ -249,6 +251,7 @@ func InteractionBackup(restic_exe_path, backupPath string, exeDir string) (bool,
 		"",     // 无tag
 		false,  // 不跳过未修改文件
 	)
+	res_func.ResClearFolder(resticPath) // 清理空目录
 
 	// 返回结果但不退出程序
 	return success, result
