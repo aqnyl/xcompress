@@ -12,7 +12,7 @@ import (
 
 func main() {
 	// 检查电脑是否有 restic 软件
-	fmt.Println("xcompress 当前版本 v1.15")
+	fmt.Println("xcompress 当前版本 v1.2.1")
 	var toml_path string
 	var restic_exe_path string
 	exePath, err := os.Executable() // 获取可执行文件路径
@@ -266,7 +266,7 @@ func InteractionBackup(restic_exe_path, backupPath string, exeDir string) (bool,
 		"",     // 无tag
 		false,  // 不跳过未修改文件
 	)
-	res_func.ResClearFolder(resticPath) // 清理空目录
+	res_func.ResClearFolder(backupName) // 清理空目录
 
 	// 返回结果但不退出程序
 	return success, result
