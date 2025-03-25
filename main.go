@@ -12,7 +12,14 @@ import (
 
 func main() {
 	// 检查电脑是否有 restic 软件
-	fmt.Println("xcompress 当前版本 v1.2.1")
+	fmt.Println("xcompress 当前版本 v1.2.2")
+	fmt.Println("👴 作者：菜玖玖emoji")
+	fmt.Println("📺 bilibili：https://space.bilibili.com/395819372")
+	fmt.Println("🧠 软件教程(失效记得艾特我)：https://www.yuque.com/xtnxnb/qo095a/tnve5f0rtnu9ad96?singleDoc#")
+	fmt.Println("💰 本软件永久免费，亲爱的富哥大姐，如有能力可以点击下方链接请我一杯米雪冰城吗，谢谢啦！！！")
+	fmt.Println("💰 https://afdian.com/a/wocaijiujiu")
+	fmt.Println("👏 感谢使用 ヾ(≧▽≦*)o\n")
+
 	var toml_path string
 	var restic_exe_path string
 	exePath, err := os.Executable() // 获取可执行文件路径
