@@ -129,13 +129,10 @@ func Toml_parse(filePath string) (bool, interface{}) {
 		// 验证路径存在性
 		for _, p := range finalCfg.Path {
 			if !pathExists(p) {
-				errorMessages += fmt.Sprintf("配置项[%s]: 路径不存在 - %s\n", configName, p)
+				errorMessages += fmt.Sprintf("配置项[%s]: 备份源路径不存在 - %s\n", configName, p)
 			}
 		}
-		fmt.Println("finalCfg.ResticHomePath: ----------", finalCfg.ResticHomePath)
-		if !pathExists(finalCfg.ResticHomePath) {
-			errorMessages += fmt.Sprintf("配置项[%s]: restic仓库路径不存在 - %s\n", configName, finalCfg.ResticHomePath)
-		}
+		// fmt.Println("finalCfg.ResticHomePath: ----------", finalCfg.ResticHomePath)
 
 		// 新增 merge 字段验证
 		if finalCfg.Merge != 0 && finalCfg.Merge != 1 {
@@ -276,21 +273,54 @@ func ResticBackup(restic_exe_path, resticPath, backupPath, passwd string, packSi
 //   - string: 成功时返回输出信息，失败时返回错误信息
 //
 // 功能说明:
-//  1. 检查仓库是否存在，不存在则自动初始化
+//  1. 检查仓库是否已初始化(通过检查config文件)，不存在则自动初始化
 //  2. 执行实际备份操作
 func ResBackup(restic_exe_path, resticPath, backupPath, passwd string, packSize int, compression, tag string, skip bool) (bool, string) {
-	if _, err := os.Stat(resticPath); os.IsNotExist(err) {
-		fmt.Printf("Restic repository %s not found, initializing...\n", resticPath)
+	// 打印完整参数信息以便调试
+	fmt.Printf("【调试信息】备份参数：\n- restic_exe_path: %s\n- resticPath: %s\n- backupPath: %s\n- 压缩模式: %s\n",
+		restic_exe_path, resticPath, backupPath, compression)
+
+	// 确保resticPath是绝对路径
+	absResticPath, err := filepath.Abs(resticPath)
+	if err != nil {
+		return false, fmt.Sprintf("无法获取仓库绝对路径: %v", err)
+	}
+	resticPath = absResticPath
+	fmt.Printf("【调试信息】使用仓库绝对路径: %s\n", resticPath)
+
+	// 修改检查逻辑：检查 config 文件是否存在，而不是仅检查目录
+	configFilePath := filepath.Join(resticPath, "config")
+	if _, err := os.Stat(configFilePath); os.IsNotExist(err) {
+		fmt.Printf("Restic仓库配置文件 %s 不存在，正在初始化仓库 %s...\n", configFilePath, resticPath)
+		// 确保仓库目录存在（即使config不存在，目录也可能存在）
+		if err := os.MkdirAll(resticPath, 0755); err != nil {
+			// 如果连创建目录都失败，则直接返回错误
+			if !os.IsExist(err) { // 忽略目录已存在的错误
+				return false, fmt.Sprintf("创建仓库目录失败: %v", err)
+			}
+		}
+
+		// 执行初始化
 		success, output := ResticInit(restic_exe_path, resticPath, passwd)
 		if !success {
-			return false, fmt.Sprintf("Init failed: %s", output)
+			return false, fmt.Sprintf("初始化失败: %s", output)
 		}
+		fmt.Printf("成功初始化仓库: %s\n", resticPath)
+	} else if err != nil {
+		// 如果 Stat config 文件时遇到其他错误 (非 "不存在" 错误)
+		return false, fmt.Sprintf("检查仓库配置文件失败: %v", err)
 	} else {
-		fmt.Printf("Restic repository %s already exists\n", resticPath)
+		fmt.Printf("Restic仓库 %s 已存在且已初始化 (找到config文件)\n", resticPath)
 	}
 
-	fmt.Printf("Starting backup from %s to %s...\n", backupPath, resticPath)
-	return ResticBackup(restic_exe_path, resticPath, backupPath, passwd, packSize, compression, tag, skip)
+	fmt.Printf("开始备份: 从 %s 到 %s...\n", backupPath, resticPath)
+	success, output := ResticBackup(restic_exe_path, resticPath, backupPath, passwd, packSize, compression, tag, skip)
+	if success {
+		fmt.Printf("备份完成: 数据已保存到 %s\n", resticPath)
+	} else {
+		fmt.Printf("备份失败: %s\n", output)
+	}
+	return success, output
 }
 
 // ResClearFolder 清理restic仓库的data目录空文件夹
