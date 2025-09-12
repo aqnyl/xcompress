@@ -1,7 +1,7 @@
 use crate::config::{self, FinalConfig};
-use crate::utils::{run_restic_command, is_restic_repo};
+use crate::utils::{is_restic_repo, run_restic_command};
 use console::style;
-use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password};
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,29 +19,54 @@ pub fn handle_backup(restic_exe_path: &str, config_path: Option<String>, target_
     } else if let Some(path) = target_path {
         // 模式二：直接备份指定的路径 (交互式)
         if !Path::new(&path).exists() {
-             eprintln!("{} {}", style("✖").red(), style(format!("错误: 提供的路径 '{}' 不存在。", path)).red().bold());
+            eprintln!("{} {}", style("✖").red(), style(format!("错误: 提供的路径 '{}' 不存在。", path)).red().bold());
         } else {
-             run_interactive_backup(restic_exe_path, Some(path)).unwrap_or_else(|e| {
-                 eprintln!("{} {}", style("✖").red(), style(format!("交互式备份失败: {}", e)).red().bold());
-             });
+            run_interactive_backup(restic_exe_path, Some(path)).unwrap_or_else(|e| {
+                eprintln!("{} {}", style("✖").red(), style(format!("交互式备份失败: {}", e)).red().bold());
+            });
         }
     } else {
         // 模式三：无参数，检查默认 toml 或进入交互式
         let default_toml = "backup_config.toml";
         if Path::new(default_toml).exists() {
-             println!("{} 检测到默认配置文件 '{}'，将使用该文件进行备份。", style("i").blue(), default_toml);
-             match config::parse_toml(default_toml) {
+            println!("{} 检测到默认配置文件 '{}'，将使用该文件进行备份。", style("i").blue(), default_toml);
+            match config::parse_toml(default_toml) {
                 Ok(configs) => run_toml_backup(restic_exe_path, configs),
                 Err(e) => eprintln!("{} {}", style("✖").red(), style(e).red().bold()),
             }
         } else {
-             println!("{} 未提供参数且未找到默认配置文件，进入交互式备份模式。", style("i").blue());
-             run_interactive_backup(restic_exe_path, None).unwrap_or_else(|e| {
-                 eprintln!("{} {}", style("✖").red(), style(format!("交互式备份失败: {}", e)).red().bold());
-             });
+            println!("{} 未提供参数且未找到默认配置文件，进入交互式备份模式。", style("i").blue());
+            run_interactive_backup(restic_exe_path, None).unwrap_or_else(|e| {
+                eprintln!("{} {}", style("✖").red(), style(format!("交互式备份失败: {}", e)).red().bold());
+            });
         }
     }
 }
+
+pub fn handle_batch_backup(restic_exe_path: &str) -> Result<(), String> {
+    println!("\n{}\n", style("--- 开始批量备份流程 ---").bold().yellow());
+    let theme = ColorfulTheme::default();
+
+    // 1. Get TOML config path
+    let config_path: String = Input::with_theme(&theme)
+        .with_prompt("请输入或拖入 backup_config.toml 文件路径")
+        .default("backup_config.toml".into())
+        .validate_with(|input: &String| -> Result<(), &str> {
+            if Path::new(input).exists() { Ok(()) } else { Err("文件不存在，请重新输入。") }
+        })
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    
+    // 2. Parse TOML and run backups
+    match config::parse_toml(&config_path) {
+        Ok(configs) => {
+            run_toml_backup(restic_exe_path, configs);
+            Ok(())
+        },
+        Err(e) => Err(e),
+    }
+}
+
 
 fn run_toml_backup(restic_exe_path: &str, configs: Vec<FinalConfig>) {
     println!("{} 成功解析配置文件，共找到 {} 个备份任务。", style("✔").green(), configs.len());
@@ -137,7 +162,8 @@ fn backup_individual(restic_exe_path: &str, config: &FinalConfig, repo_path: &Pa
 
 fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) -> Result<(), String> {
     let theme = ColorfulTheme::default();
-    
+
+    // 1. Get path to back up
     let backup_path_str = match target_path {
         Some(path) => path,
         None => Input::with_theme(&theme)
@@ -148,19 +174,80 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
             .interact_text().map_err(|e| e.to_string())?,
     };
     let backup_path = Path::new(&backup_path_str);
-    
-    let backup_name: String = Input::with_theme(&theme)
-        .with_prompt("请输入备份名称 (将作为仓库目录名)")
-        .interact_text().map_err(|e| e.to_string())?;
 
-    let password = Password::with_theme(&theme)
-        .with_prompt("请输入备份密码")
-        .with_confirmation("请再次输入密码确认", "两次输入的密码不匹配。") // FIX: Changed .confirmation to .with_confirmation
-        .interact().map_err(|e| e.to_string())?;
-        
+    // 2. Get base directory for repositories
     let exe_dir = env::current_dir().map_err(|e| format!("获取当前目录失败: {}", e))?;
-    let repo_path = exe_dir.join(&backup_name);
-    
+    let default_repo_base = exe_dir.to_string_lossy().to_string();
+    let repo_base_str: String = Input::with_theme(&theme)
+        .with_prompt("请输入 restic 仓库的存放目录 (留空则使用当前程序目录)")
+        .default(default_repo_base)
+        .interact_text()
+        .map_err(|e| e.to_string())?;
+    let repo_base_path = Path::new(&repo_base_str);
+
+    if !repo_base_path.exists() || !repo_base_path.is_dir() {
+        return Err(format!("仓库存放目录 '{}' 不是一个有效的目录。", repo_base_str));
+    }
+
+    // 3. Scan for existing repositories
+    println!("\n{} 正在扫描 '{}' 下的 restic 仓库...", style("i").blue(), repo_base_path.display());
+    let mut existing_repos = Vec::new();
+    if let Ok(entries) = fs::read_dir(repo_base_path) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() && is_restic_repo(&path) {
+                existing_repos.push(path);
+            }
+        }
+    }
+
+    // 4. User selects a repository or chooses to create a new one
+    let mut selection_items: Vec<String> = existing_repos
+        .iter()
+        .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
+        .collect();
+
+    selection_items.sort();
+    let create_new_option = "[ 创建一个新的备份仓库 ]".to_string();
+    selection_items.push(create_new_option.clone());
+
+    let selection = Select::with_theme(&theme)
+        .with_prompt("请选择要使用的备份仓库")
+        .items(&selection_items)
+        .default(0)
+        .interact()
+        .map_err(|e| e.to_string())?;
+
+    let repo_path: PathBuf;
+
+    if selection_items[selection] == create_new_option {
+        // 5a. Create a new repository
+        loop {
+            let backup_name: String = Input::with_theme(&theme)
+                .with_prompt("请输入新备份仓库的名称")
+                .interact_text().map_err(|e| e.to_string())?;
+
+            let potential_path = repo_base_path.join(&backup_name);
+
+            if potential_path.exists() {
+                eprintln!("{}", style(format!("错误: 目录 '{}' 已存在，请选择列表中的已有仓库或输入一个新的名称。", potential_path.display())).red());
+                // Loop continues
+            } else {
+                repo_path = potential_path;
+                break;
+            }
+        }
+    } else {
+        // 5b. Use an existing repository
+        repo_path = repo_base_path.join(&selection_items[selection]);
+    }
+
+    // 6. Get password and confirm
+    let password = Password::with_theme(&theme)
+        .with_prompt(format!("请输入仓库 '{}' 的密码", repo_path.file_name().unwrap_or_default().to_string_lossy()))
+        .with_confirmation("请再次输入密码确认", "两次输入的密码不匹配。")
+        .interact().map_err(|e| e.to_string())?;
+
     println!("\n{} 准备将 '{}' 备份到 '{}'...", style("i").blue(), backup_path.display(), repo_path.display());
 
     if !Confirm::with_theme(&theme).with_prompt("确认开始备份吗?").interact().unwrap_or(false) {
@@ -168,6 +255,7 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
         return Ok(());
     }
 
+    // 7. Execute backup
     match execute_backup(restic_exe_path, &repo_path, backup_path, &password, "") {
         Ok(msg) => {
             println!("{}\n{}", style("✔ 交互式备份成功!").green().bold(), msg);
@@ -182,7 +270,7 @@ fn execute_backup(restic_exe_path: &str, repo_path: &Path, backup_path: &Path, p
     // 1. 如果仓库不存在，则自动初始化
     if !is_restic_repo(repo_path) {
         if repo_path.exists() && repo_path.read_dir().unwrap().next().is_some() {
-             return Err(format!("目录 {} 已存在但不是有效的 restic 仓库。", repo_path.display()));
+            return Err(format!("目录 {} 已存在但不是有效的 restic 仓库。", repo_path.display()));
         }
         fs::create_dir_all(repo_path).map_err(|e| format!("创建仓库目录失败: {}", e))?;
         println!("{} 仓库 {} 不存在，正在初始化...", style("i").blue(), repo_path.display());
@@ -192,7 +280,6 @@ fn execute_backup(restic_exe_path: &str, repo_path: &Path, backup_path: &Path, p
     }
 
     // 2. 执行备份
-    // FIX: Create bindings to extend the lifetime of the temporary strings
     let repo_path_str = repo_path.to_string_lossy();
     let backup_path_str = backup_path.to_string_lossy();
     

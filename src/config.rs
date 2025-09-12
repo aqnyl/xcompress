@@ -102,3 +102,83 @@ pub fn parse_toml(file_path: &str) -> Result<Vec<FinalConfig>, String> {
     
     Ok(final_configs)
 }
+
+// ----- NEW STRUCTS FOR BATCH RESTORE -----
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RestoreJob {
+    pub repo: Option<String>,
+    pub target: Option<String>,
+    pub passwd: Option<String>,
+    pub snapshots: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct GlobalRestoreConfig {
+    pub passwd: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RestoreConfigFile {
+    #[serde(default)]
+    global: GlobalRestoreConfig,
+    restore_jobs: HashMap<String, RestoreJob>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FinalRestoreConfig {
+    pub job_name: String,
+    pub repo: String,
+    pub target: String,
+    pub passwd: String,
+    pub snapshots: String,
+}
+
+
+/// 解析批量恢复的 TOML 配置文件并验证
+pub fn parse_restore_toml(file_path: &str) -> Result<Vec<FinalRestoreConfig>, String> {
+    let toml_content = std::fs::read_to_string(file_path)
+        .map_err(|e| format!("读取恢复 TOML 文件 '{}' 失败: {}", file_path, e))?;
+
+    let config_file: RestoreConfigFile = toml::from_str(&toml_content)
+        .map_err(|e| format!("恢复 TOML 文件解析失败: {}", e))?;
+
+    let mut final_configs = Vec::new();
+    let mut error_messages = String::new();
+
+    for (job_name, job) in config_file.restore_jobs {
+        let final_cfg = FinalRestoreConfig {
+            job_name: job_name.clone(),
+            repo: job.repo.unwrap_or_default(),
+            target: job.target.unwrap_or_default(),
+            passwd: job.passwd.or(config_file.global.passwd.clone()).unwrap_or_default(),
+            snapshots: job.snapshots.unwrap_or_else(|| "latest".to_string()),
+        };
+
+        // 验证必填字段
+        if final_cfg.repo.is_empty() {
+            error_messages.push_str(&format!("[{}]: `repo` 字段不能为空。\n", job_name));
+        }
+        if !Path::new(&final_cfg.repo).exists() {
+             error_messages.push_str(&format!("[{}]: 仓库路径 '{}' 不存在。\n", job_name, final_cfg.repo));
+        }
+        if final_cfg.target.is_empty() {
+            error_messages.push_str(&format!("[{}]: `target` 字段不能为空。\n", job_name));
+        }
+        if final_cfg.passwd.is_empty() {
+            error_messages.push_str(&format!("[{}]: `passwd` 字段不能为空 (全局或局部必须设置一个)。\n", job_name));
+        }
+
+        final_configs.push(final_cfg);
+    }
+
+    if !error_messages.is_empty() {
+        return Err(format!("恢复配置文件验证失败:\n{}", error_messages));
+    }
+
+    if final_configs.is_empty() {
+        return Err("恢复配置文件中未找到任何有效的 [restore_jobs] 配置项。".to_string());
+    }
+
+    Ok(final_configs)
+}
