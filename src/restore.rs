@@ -11,18 +11,25 @@ struct Snapshot {
     short_id: String,
     time: String,
     paths: Vec<String>,
+    size: u64,
 }
 
-pub fn handle_restore(restic_exe_path: &str) -> Result<(), String> {
+pub fn handle_restore(restic_exe_path: &str, repo_path_arg: Option<String>) -> Result<(), String> {
     println!("\n{}\n", style("--- 开始恢复流程 ---").bold().yellow());
     
     let theme = ColorfulTheme::default();
     
-    // 获取仓库路径
-    let repo_path_str: String = Input::with_theme(&theme)
-        .with_prompt("请输入或拖入 restic 仓库路径")
-        .interact_text()
-        .map_err(|e| e.to_string())?;
+    // 如果命令行已提供路径，则使用它，否则提示用户输入
+    let repo_path_str: String = match repo_path_arg {
+        Some(path) => {
+            println!("{} 使用命令行提供的仓库路径: {}", style("✔").green(), style(&path).dim());
+            path
+        }
+        None => Input::with_theme(&theme)
+            .with_prompt("请输入或拖入 restic 仓库路径")
+            .interact_text()
+            .map_err(|e| e.to_string())?,
+    };
     
     let repo_path = Path::new(repo_path_str.trim());
     if !utils::is_restic_repo(repo_path) {
@@ -43,28 +50,63 @@ pub fn handle_restore(restic_exe_path: &str) -> Result<(), String> {
         return Err("仓库中未找到任何快照。".to_string());
     }
 
-    // 让用户选择快照
+    // 1. 让用户选择快照 (显示更详细信息)
     let snapshot_items: Vec<String> = snapshots
         .iter()
-        .map(|s| format!("{}  ({})  {}", s.short_id, s.time.split('T').next().unwrap_or(""), s.paths.join(", ")))
+        .map(|s| {
+            format!(
+                "{}  ({})  {}  [{}]",
+                s.short_id,
+                s.time.split('T').next().unwrap_or(""),
+                style(utils::format_bytes(s.size)).dim(),
+                s.paths.join(", ")
+            )
+        })
         .collect();
     
-    let selection = Select::with_theme(&theme)
+    let selection_idx = match Select::with_theme(&theme)
         .with_prompt("请选择要恢复的快照 (按 'q' 退出)")
         .items(&snapshot_items)
         .default(0)
         .interact_opt()
-        .map_err(|e| e.to_string())?;
-
-    let selected_snapshot = match selection {
-        Some(index) => &snapshots[index],
+        .map_err(|e| e.to_string())?
+    {
+        Some(index) => index,
         None => {
             println!("{}", style("操作已取消。").yellow());
             return Ok(());
         }
     };
-    
-    // 决定输出路径
+    let selected_snapshot = &snapshots[selection_idx];
+
+    // 2. 如果快照有多个路径，让用户选择一个
+    let path_to_restore: &str = if selected_snapshot.paths.len() > 1 {
+        let path_selection = Select::with_theme(&theme)
+            .with_prompt("此快照包含多个路径，请选择要恢复哪一个")
+            .items(&selected_snapshot.paths)
+            .default(0)
+            .interact()
+            .map_err(|e| e.to_string())?;
+        &selected_snapshot.paths[path_selection]
+    } else if let Some(path) = selected_snapshot.paths.first() {
+        path
+    } else {
+        return Err("此快照不包含任何可恢复的路径。".to_string());
+    };
+
+    // 3. 让用户选择恢复模式
+    let restore_modes = &[
+        "仅恢复最后一级目录 (推荐, 类似解压)",
+        "按原始完整路径恢复 (restic 默认行为)",
+    ];
+    let mode_selection = Select::with_theme(&theme)
+        .with_prompt("请选择恢复模式")
+        .items(restore_modes)
+        .default(0)
+        .interact()
+        .map_err(|e| e.to_string())?;
+
+    // 4. 决定输出路径
     let current_dir = env::current_dir().map_err(|e| e.to_string())?;
     let default_output_path = current_dir.to_string_lossy();
     let output_path_str: String = Input::with_theme(&theme)
@@ -75,14 +117,27 @@ pub fn handle_restore(restic_exe_path: &str) -> Result<(), String> {
     
     println!("\n{} 準備恢復快照 {} 到 '{}'...", style("i").blue(), selected_snapshot.short_id, output_path_str);
     
-    // 执行恢复命令
-    let args = [
-        "-r", &repo_path.to_string_lossy(),
-        "restore", &selected_snapshot.short_id,
-        "--target", &output_path_str
-    ];
+    // 5. 构建恢复命令参数
+    let repo_path_lossy = repo_path.to_string_lossy();
+    let mut args_vec = vec!["-r", &repo_path_lossy, "restore"];
+    
+    let snapshot_arg: String;
+    if mode_selection == 0 { // 模式: 剥离路径
+        let original_path = Path::new(path_to_restore);
+        if let Some(parent) = original_path.parent() {
+            let restic_parent_path = utils::convert_to_restic_path(parent);
+            snapshot_arg = format!("{}:{}", selected_snapshot.short_id, restic_parent_path);
+            args_vec.push(&snapshot_arg);
+        } else {
+            args_vec.push(&selected_snapshot.short_id);
+        }
+    } else { // 模式: 完整路径
+        args_vec.push(&selected_snapshot.short_id);
+    }
 
-    match run_restic_command(restic_exe_path, &args, &password) {
+    args_vec.extend(&["--target", &output_path_str]);
+    
+    match run_restic_command(restic_exe_path, &args_vec, &password) {
         Ok(output) => {
             println!("{}\n{}", style("✔ 恢复成功!").green().bold(), output);
             Ok(())
@@ -95,7 +150,6 @@ pub fn handle_batch_restore(restic_exe_path: &str) -> Result<(), String> {
     println!("\n{}\n", style("--- 开始批量恢复流程 ---").bold().yellow());
     let theme = ColorfulTheme::default();
 
-    // 1. Get TOML config path
     let config_path: String = Input::with_theme(&theme)
         .with_prompt("请输入或拖入 restore_config.toml 文件路径")
         .default("restore_config.toml".into())
@@ -105,22 +159,19 @@ pub fn handle_batch_restore(restic_exe_path: &str) -> Result<(), String> {
         .interact_text()
         .map_err(|e| e.to_string())?;
 
-    // 2. Parse TOML
-    let configs = match config::parse_restore_toml(&config_path) {
-        Ok(c) => c,
-        Err(e) => return Err(e),
-    };
+    let configs = config::parse_restore_toml(&config_path)?;
 
     println!("{} 成功解析恢复配置文件，共找到 {} 个恢复任务。", style("✔").green(), configs.len());
     let mut summary = Vec::new();
 
-    // 3. Iterate and execute jobs
     for job in configs {
         println!("\n{}", style(format!("--- 处理任务: {} ---", job.job_name)).cyan().bold());
         println!("{} 仓库: {}", style("→").dim(), job.repo);
         println!("{} 目标: {}", style("→").dim(), job.target);
+        if !job.restore_path.is_empty() {
+             println!("{} 指定恢复子路径: {}", style("→").dim(), job.restore_path);
+        }
 
-        // Create target directory if it doesn't exist
         if !Path::new(&job.target).exists() {
             if let Err(e) = std::fs::create_dir_all(&job.target) {
                 let err_msg = format!("创建目标目录 '{}' 失败: {}", job.target, e);
@@ -129,7 +180,6 @@ pub fn handle_batch_restore(restic_exe_path: &str) -> Result<(), String> {
             }
         }
 
-        // Get all snapshots from the repo first
         let all_snapshots = match get_snapshots(restic_exe_path, &job.repo, &job.passwd) {
             Ok(snaps) => snaps,
             Err(e) => {
@@ -145,18 +195,17 @@ pub fn handle_batch_restore(restic_exe_path: &str) -> Result<(), String> {
             continue;
         }
 
-        // Determine which snapshots to restore based on the "snapshots" string
         let mut snapshots_to_restore: Vec<&Snapshot> = Vec::new();
         match job.snapshots.to_lowercase().trim() {
             "latest" => {
-                if let Some(latest) = all_snapshots.first() { // Snapshots are sorted descending by time
+                if let Some(latest) = all_snapshots.first() {
                     snapshots_to_restore.push(latest);
                 }
             },
             "all" => {
                 snapshots_to_restore.extend(all_snapshots.iter());
             },
-            ids_str => { // Assume comma-separated list of short IDs
+            ids_str => {
                 let ids: Vec<&str> = ids_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
                 for id in ids {
                     if let Some(snap) = all_snapshots.iter().find(|s| s.short_id.starts_with(id)) {
@@ -175,13 +224,37 @@ pub fn handle_batch_restore(restic_exe_path: &str) -> Result<(), String> {
              continue;
         }
 
-        // Execute restore for each selected snapshot
         let mut job_had_error = false;
         for snapshot in &snapshots_to_restore {
-             println!("{} 正在恢复快照 {} 到 '{}'...", style("i").blue(), snapshot.short_id, job.target);
-             let args = [
+            println!("{} 正在恢复快照 {} 到 '{}'...", style("i").blue(), snapshot.short_id, job.target);
+            
+            let mut snapshot_arg = snapshot.short_id.clone();
+            let mut error_in_snapshot = false;
+
+            if !job.restore_path.is_empty() {
+                let found_path = snapshot.paths.iter().find(|p| Path::new(p).ends_with(&job.restore_path));
+                
+                if let Some(full_path_str) = found_path {
+                    let full_path = Path::new(full_path_str);
+                    if let Some(parent) = full_path.parent() {
+                        let restic_parent_path = utils::convert_to_restic_path(parent);
+                        snapshot_arg = format!("{}:{}", snapshot.short_id, restic_parent_path);
+                    }
+                } else {
+                    let err_msg = format!("在快照 {} 中未找到指定的子路径 '{}'", snapshot.short_id, job.restore_path);
+                    summary.push(format!("{} {}: {}", style("✖").red(), job.job_name, err_msg));
+                    job_had_error = true;
+                    error_in_snapshot = true;
+                }
+            }
+            
+            if error_in_snapshot {
+                break; 
+            }
+
+            let args = [
                 "-r", &job.repo,
-                "restore", &snapshot.short_id,
+                "restore", &snapshot_arg,
                 "--target", &job.target
             ];
 
@@ -189,7 +262,7 @@ pub fn handle_batch_restore(restic_exe_path: &str) -> Result<(), String> {
                 let err_msg = format!("恢复快照 {} 失败: {}", snapshot.short_id, e);
                 summary.push(format!("{} {}: {}", style("✖").red(), job.job_name, err_msg));
                 job_had_error = true;
-                break; // Stop this job on first error
+                break;
             }
         }
         if !job_had_error {
@@ -206,15 +279,20 @@ fn get_snapshots(restic_exe_path: &str, repo_path: &str, password: &str) -> Resu
     let args = ["-r", repo_path, "snapshots", "--json"];
     let output = run_restic_command(restic_exe_path, &args, password)?;
 
-    // restic 的 json 输出可能不是严格的 json 数组，需要正则提取
-    let re = Regex::new(r"\[.*\]").unwrap();
+    // 【修正】更新正则表达式以支持跨行匹配 (dotall flag `(?s)`)
+    // Restic 输出的 JSON 可能是格式化过的，包含换行符，之前的 `.` 无法匹配换行
+    let re = Regex::new(r"(?s)\[.*\]").unwrap();
     let json_str = match re.find(&output) {
         Some(m) => m.as_str(),
-        None => return Err("无法从 restic 输出中解析快照 JSON 数据。".to_string()),
+        None => {
+             // 如果正则匹配失败，可以打印输出内容以帮助调试
+             // eprintln!("DEBUG: Restic output did not contain a JSON array:\n{}", output);
+             return Err("无法从 restic 输出中解析快照 JSON 数据。".to_string());
+        }
     };
 
     let json_data: Value = serde_json::from_str(json_str)
-        .map_err(|e| format!("解析快照 JSON 失败: {}", e))?;
+        .map_err(|e| format!("解析快照 JSON 失败: {}. Raw JSON string: {}", e, json_str))?;
 
     let mut snapshots = Vec::new();
     if let Some(snaps_array) = json_data.as_array() {
@@ -225,9 +303,10 @@ fn get_snapshots(restic_exe_path: &str, repo_path: &str, password: &str) -> Resu
                 paths: snap["paths"].as_array().map_or(vec![], |paths| {
                     paths.iter().map(|p| p.as_str().unwrap_or("").to_string()).collect()
                 }),
+                size: snap["size"].as_u64().unwrap_or(0),
             });
         }
     }
-    snapshots.sort_by(|a, b| b.time.cmp(&a.time)); // 按时间倒序
+    snapshots.sort_by(|a, b| b.time.cmp(&a.time));
     Ok(snapshots)
 }

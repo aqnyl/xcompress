@@ -103,7 +103,7 @@ pub fn parse_toml(file_path: &str) -> Result<Vec<FinalConfig>, String> {
     Ok(final_configs)
 }
 
-// ----- NEW STRUCTS FOR BATCH RESTORE -----
+// ----- STRUCTS FOR BATCH RESTORE -----
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct RestoreJob {
@@ -111,6 +111,7 @@ pub struct RestoreJob {
     pub target: Option<String>,
     pub passwd: Option<String>,
     pub snapshots: Option<String>,
+    pub restore_path: Option<String>, // 新增: 指定快照中要恢复的子路径
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -132,6 +133,7 @@ pub struct FinalRestoreConfig {
     pub target: String,
     pub passwd: String,
     pub snapshots: String,
+    pub restore_path: String, // 新增: 指定快照中要恢复的子路径
 }
 
 
@@ -153,6 +155,7 @@ pub fn parse_restore_toml(file_path: &str) -> Result<Vec<FinalRestoreConfig>, St
             target: job.target.unwrap_or_default(),
             passwd: job.passwd.or(config_file.global.passwd.clone()).unwrap_or_default(),
             snapshots: job.snapshots.unwrap_or_else(|| "latest".to_string()),
+            restore_path: job.restore_path.unwrap_or_default(), // 新增
         };
 
         // 验证必填字段

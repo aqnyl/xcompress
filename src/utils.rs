@@ -16,8 +16,8 @@ pub fn print_header() {
     let version = env!("CARGO_PKG_VERSION");
     let border = "=======================================================================";
     println!("\n{}\n", style(border).magenta());
-    println!("{}", style(format!("          xcompress v{} - 您的 restic 备份/恢复助手", version)).cyan().bold());
-    println!("          {}\n", style("作者: 菜玖玖emoji | Bilibili: space.bilibili.com/395819372").yellow());
+    println!("{}", style(format!("        xcompress v{} - 您的 restic 备份/恢复助手", version)).cyan().bold());
+    println!("        {}\n", style("作者: 菜玖玖emoji | Bilibili: space.bilibili.com/395819372").yellow());
     println!("{}\n", style(border).magenta());
 }
 
@@ -32,7 +32,7 @@ pub fn check_restic_path() -> Result<String, String> {
         if let Some(script_dir) = exe_path.parent() {
             let restic_exe_path = script_dir.join("restic.exe");
             if Path::new(&restic_exe_path).exists() {
-                 println!("{} {}", style("✔").green(), style("检测到程序目录中的 restic.exe，将优先使用。").dim());
+                println!("{} {}", style("✔").green(), style("检测到程序目录中的 restic.exe，将优先使用。").dim());
                 return Ok(restic_exe_path.to_string_lossy().into_owned());
             }
         }
@@ -56,6 +56,49 @@ pub fn check_restic_path() -> Result<String, String> {
         style("✖").red(),
         style("错误: 未找到 restic 环境。\n请将 restic.exe 放置于本程序同目录下，或将其路径添加到系统 PATH 环境变量中。").red().bold()
     ))
+}
+
+/// 格式化字节大小为可读的字符串
+pub fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    const TB: u64 = 1024 * GB;
+
+    if bytes >= TB {
+        format!("{:.2} TiB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GiB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MiB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KiB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+/// 将标准系统路径转换为 restic 在 restore <id>:"/path" 中接受的格式
+/// Windows: D:\work\project -> /D/work/project
+/// Linux: /home/user -> /home/user (无变化)
+pub fn convert_to_restic_path(p: &Path) -> String {
+    if cfg!(windows) {
+        let mut path_str = p.to_string_lossy().to_string();
+        // 替换反斜杠
+        path_str = path_str.replace("\\", "/");
+        // 处理驱动器号
+        if let Some(drive_colon) = path_str.get(0..2) {
+             if drive_colon.ends_with(':') {
+                 // D: -> /D
+                 return format!("/{}", path_str.replace(":", ""));
+             }
+        }
+        // 如果是 UNC 路径或其它特殊格式，可能不会被转换，但这能处理绝大多数情况
+        path_str
+    } else {
+        // 对于类 Unix 系统, 路径已经是正确的格式
+        p.to_string_lossy().to_string()
+    }
 }
 
 
@@ -82,12 +125,12 @@ pub fn is_restic_repo(path: &Path) -> bool {
 }
 
 /// 带有密码输入的 Restic 命令执行器
-/// 
+///
 /// # 参数
 /// - `restic_exe_path`: restic 可执行文件路径
 /// - `args`: 传递给 restic 的参数列表
 /// - `password`: 仓库密码
-/// 
+///
 /// # 返回
 /// - `Ok(String)`: 命令成功执行的标准输出
 /// - `Err(String)`: 错误信息（包含标准错误输出）

@@ -5,6 +5,7 @@ mod restore;
 mod help;
 
 use std::env;
+use std::path::Path; // 引入 Path
 use console::style;
 use dialoguer::{theme::ColorfulTheme, Select};
 
@@ -29,9 +30,21 @@ fn main() {
         // 如果有参数，直接处理并退出，不显示菜单
         let first_arg = &args[1];
         if first_arg.ends_with(".toml") {
+            // 参数是 toml 配置文件，执行批量备份
             backup::handle_backup(&restic_exe_path, Some(first_arg.clone()), None);
         } else {
-            backup::handle_backup(&restic_exe_path, None, Some(first_arg.clone()));
+            // 参数是普通路径，判断是仓库还是备份源
+            let path = Path::new(first_arg);
+            if utils::is_restic_repo(path) {
+                // 是一个 Restic 仓库 -> 启动恢复流程
+                println!("{} 检测到提供的路径是一个 Restic 仓库，进入恢复模式...", style("i").blue());
+                if let Err(e) = restore::handle_restore(&restic_exe_path, Some(first_arg.clone())) {
+                    eprintln!("\n{} {}", style("✖ 恢复操作失败:").red().bold(), style(e).red());
+                }
+            } else {
+                // 不是仓库 -> 视为备份源，启动备份流程
+                backup::handle_backup(&restic_exe_path, None, Some(first_arg.clone()));
+            }
         }
     } else {
         // 如果没有参数，显示交互式主菜单
@@ -68,7 +81,7 @@ fn show_main_menu(restic_exe_path: &str) {
                 should_exit_loop = true;
             }
             Some(1) => { // 恢复
-                if let Err(e) = restore::handle_restore(restic_exe_path) {
+                if let Err(e) = restore::handle_restore(restic_exe_path, None) {
                     eprintln!("\n{} {}", style("✖ 恢复操作失败:").red().bold(), style(e).red());
                 }
                 should_exit_loop = true;
