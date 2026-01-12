@@ -22,18 +22,28 @@ pub fn print_header() {
 }
 
 /// 检查 restic 是否可用，并返回其路径
-/// 检查顺序: 1. 程序同目录下的 restic.exe; 2. 系统 PATH
+/// 检查顺序: 1. 程序同目录下的 restic/restic.exe; 2. 系统 PATH
 /// 返回值:
 /// - Ok(String): restic 的可执行路径
 /// - Err(String): 未找到 restic 的错误信息
 pub fn check_restic_path() -> Result<String, String> {
-    // 优先查找当前程序所在目录下是否有 restic.exe
+    // 优先查找当前程序所在目录下是否有 restic 可执行文件
     if let Ok(exe_path) = env::current_exe() {
         if let Some(script_dir) = exe_path.parent() {
-            let restic_exe_path = script_dir.join("restic.exe");
-            if Path::new(&restic_exe_path).exists() {
-                println!("{} {}", style("✔").green(), style("检测到程序目录中的 restic.exe，将优先使用。").dim());
-                return Ok(restic_exe_path.to_string_lossy().into_owned());
+            // 根据操作系统决定优先检查的文件名
+            let binary_name = if cfg!(windows) { "restic.exe" } else { "restic" };
+            let primary_path = script_dir.join(binary_name);
+            
+            // 兼容性检查：如果在 Linux 上放了 restic.exe 或者 Windows 上是 restic
+            let secondary_name = if cfg!(windows) { "restic" } else { "restic.exe" };
+            let secondary_path = script_dir.join(secondary_name);
+
+            if primary_path.exists() {
+                println!("{} {}", style("✔").green(), style(format!("检测到程序目录中的 {}，将优先使用。", binary_name)).dim());
+                return Ok(primary_path.to_string_lossy().into_owned());
+            } else if secondary_path.exists() {
+                println!("{} {}", style("✔").green(), style(format!("检测到程序目录中的 {}，将优先使用。", secondary_name)).dim());
+                return Ok(secondary_path.to_string_lossy().into_owned());
             }
         }
     }
@@ -44,7 +54,8 @@ pub fn check_restic_path() -> Result<String, String> {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let re = Regex::new(r"restic \d+\.").unwrap();
-            if re.is_match(&stdout) {
+            // 只要包含 restic 版本信息即可
+            if re.is_match(&stdout) || stdout.contains("restic") {
                 println!("{} {}", style("✔").green(), style("检测到系统 PATH 中的 restic，将使用系统版本。").dim());
                 return Ok("restic".to_string());
             }
@@ -54,7 +65,7 @@ pub fn check_restic_path() -> Result<String, String> {
     Err(format!(
         "{} {}",
         style("✖").red(),
-        style("错误: 未找到 restic 环境。\n请将 restic.exe 放置于本程序同目录下，或将其路径添加到系统 PATH 环境变量中。").red().bold()
+        style("错误: 未找到 restic 环境。\n请将 restic 可执行文件(Linux下通常为 'restic', Windows下为 'restic.exe') 放置于本程序同目录下，或将其路径添加到系统 PATH 环境变量中。").red().bold()
     ))
 }
 

@@ -27,10 +27,19 @@ pub fn handle_backup(restic_exe_path: &str, config_path: Option<String>, target_
         }
     } else {
         // 模式三：无参数，检查默认 toml 或进入交互式
-        let default_toml = "backup_config.toml";
-        if Path::new(default_toml).exists() {
-            println!("{} 检测到默认配置文件 '{}'，将使用该文件进行备份。", style("i").blue(), default_toml);
-            match config::parse_toml(default_toml) {
+        // 优先检查 backup_config.toml，其次检查 backup.toml
+        let default_tomls = vec!["backup_config.toml", "backup.toml"];
+        let mut found_toml = None;
+        for t in default_tomls {
+            if Path::new(t).exists() {
+                found_toml = Some(t);
+                break;
+            }
+        }
+        
+        if let Some(toml_file) = found_toml {
+            println!("{} 检测到默认配置文件 '{}'，将使用该文件进行备份。", style("i").blue(), toml_file);
+            match config::parse_toml(toml_file) {
                 Ok(configs) => run_toml_backup(restic_exe_path, configs),
                 Err(e) => eprintln!("{} {}", style("✖").red(), style(e).red().bold()),
             }
@@ -47,10 +56,19 @@ pub fn handle_batch_backup(restic_exe_path: &str) -> Result<(), String> {
     println!("\n{}\n", style("--- 开始批量备份流程 ---").bold().yellow());
     let theme = ColorfulTheme::default();
 
+    // 智能设置默认值
+    let default_val = if Path::new("backup_config.toml").exists() {
+        "backup_config.toml"
+    } else if Path::new("backup.toml").exists() {
+        "backup.toml"
+    } else {
+        "backup_config.toml"
+    };
+
     // 1. Get TOML config path
     let config_path: String = Input::with_theme(&theme)
         .with_prompt("请输入或拖入 backup_config.toml 文件路径")
-        .default("backup_config.toml".into())
+        .default(default_val.into())
         .validate_with(|input: &String| -> Result<(), &str> {
             if Path::new(input).exists() { Ok(()) } else { Err("文件不存在，请重新输入。") }
         })
