@@ -149,7 +149,7 @@ fn backup_merged(restic_exe_path: &str, config: &FinalConfig, repo_path: &Path) 
     
     // 执行备份
     println!("{} 开始备份合并目录 {} ...", style("→").dim(), merge_path.display());
-    let backup_result = execute_backup(restic_exe_path, repo_path, &merge_path, &config.passwd, &config.tag);
+    let backup_result = execute_backup(restic_exe_path, repo_path, &merge_path, &config.passwd, &config.tag, config.pack_size);
 
     // 清理临时目录
     let _ = fs::remove_dir_all(&merge_path);
@@ -165,7 +165,7 @@ fn backup_individual(restic_exe_path: &str, config: &FinalConfig, repo_path: &Pa
     for path_str in &config.path {
         let backup_path = Path::new(path_str);
         println!("  - 正在备份 {} ...", style(backup_path.display()).dim());
-        match execute_backup(restic_exe_path, repo_path, backup_path, &config.passwd, &config.tag) {
+        match execute_backup(restic_exe_path, repo_path, backup_path, &config.passwd, &config.tag, config.pack_size) {
             Ok(_) => success_count += 1,
             Err(e) => path_errors.push(format!("路径 {} 备份失败: {}", path_str, e)),
         }
@@ -237,6 +237,8 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
         .map_err(|e| e.to_string())?;
 
     let repo_path: PathBuf;
+    // 默认 pack_size，稍后会根据用户交互更新
+    let mut pack_size: u64 = 16; 
 
     if selection_items[selection] == create_new_option {
         // 5a. Create a new repository
@@ -266,6 +268,33 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
         .with_confirmation("请再次输入密码确认", "两次输入的密码不匹配。")
         .interact().map_err(|e| e.to_string())?;
 
+    // 7. 每次备份前询问 Pack Size
+    let size_opts = vec![
+        "默认 (16 MiB) - 适用于大多数情况",
+        "最大 (128 MiB) - 适用于大文件备份",
+        "自定义大小 (16-128 MiB)"
+    ];
+    let size_selection = Select::with_theme(&theme)
+        .with_prompt("请选择本次备份的存储单元大小 (Pack Size)")
+        .items(&size_opts)
+        .default(0)
+        .interact()
+        .map_err(|e| e.to_string())?;
+
+    pack_size = match size_selection {
+        0 => 16,
+        1 => 128,
+        2 => Input::with_theme(&theme)
+            .with_prompt("请输入 Pack Size (MiB)")
+            .default(16)
+            .validate_with(|input: &u64| -> Result<(), &str> {
+                if *input >= 16 && *input <= 128 { Ok(()) } else { Err("范围必须在 16 到 128 之间") }
+            })
+            .interact_text()
+            .map_err(|e| e.to_string())?,
+        _ => 16,
+    };
+
     println!("\n{} 准备将 '{}' 备份到 '{}'...", style("i").blue(), backup_path.display(), repo_path.display());
 
     if !Confirm::with_theme(&theme).with_prompt("确认开始备份吗?").interact().unwrap_or(false) {
@@ -274,7 +303,7 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
     }
 
     // 7. Execute backup
-    match execute_backup(restic_exe_path, &repo_path, backup_path, &password, "") {
+    match execute_backup(restic_exe_path, &repo_path, backup_path, &password, "", pack_size) {
         Ok(msg) => {
             println!("{}\n{}", style("✔ 交互式备份成功!").green().bold(), msg);
             Ok(())
@@ -284,14 +313,16 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
 }
 
 /// 核心备份执行函数
-fn execute_backup(restic_exe_path: &str, repo_path: &Path, backup_path: &Path, passwd: &str, tag: &str) -> Result<String, String> {
+fn execute_backup(restic_exe_path: &str, repo_path: &Path, backup_path: &Path, passwd: &str, tag: &str, pack_size: u64) -> Result<String, String> {
     // 1. 如果仓库不存在，则自动初始化
     if !is_restic_repo(repo_path) {
         if repo_path.exists() && repo_path.read_dir().unwrap().next().is_some() {
             return Err(format!("目录 {} 已存在但不是有效的 restic 仓库。", repo_path.display()));
         }
         fs::create_dir_all(repo_path).map_err(|e| format!("创建仓库目录失败: {}", e))?;
+        
         println!("{} 仓库 {} 不存在，正在初始化...", style("i").blue(), repo_path.display());
+        // init 时不强制指定 pack-size，留给 backup 命令指定
         let init_args = ["-r", &repo_path.to_string_lossy(), "init"];
         run_restic_command(restic_exe_path, &init_args, passwd)?;
         println!("{} 仓库初始化成功。", style("✔").green());
@@ -300,11 +331,13 @@ fn execute_backup(restic_exe_path: &str, repo_path: &Path, backup_path: &Path, p
     // 2. 执行备份
     let repo_path_str = repo_path.to_string_lossy();
     let backup_path_str = backup_path.to_string_lossy();
+    let pack_size_str = pack_size.to_string();
     
     let mut backup_args = vec![
         "-r", &repo_path_str,
         "backup", &backup_path_str,
-        "--no-scan" // 提升性能
+        "--no-scan",
+        "--pack-size", &pack_size_str // 在备份时指定 pack-size
     ];
 
     if !tag.is_empty() {

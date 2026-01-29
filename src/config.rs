@@ -11,6 +11,8 @@ pub struct TomlConfig {
     pub restic_home_path: Option<String>,
     pub merge: Option<i64>,
     pub merge_name: Option<String>,
+    #[serde(alias = "pack_site")] // 兼容用户可能的拼写错误
+    pub pack_size: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -19,6 +21,8 @@ pub struct GlobalConfig {
     pub passwd: Option<String>,
     pub restic_home_path: Option<String>,
     pub tag: Option<String>,
+    #[serde(alias = "pack_site")] // 兼容用户可能的拼写错误
+    pub pack_size: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,6 +42,7 @@ pub struct FinalConfig {
     pub restic_home_path: String,
     pub merge: i64,
     pub merge_name: String,
+    pub pack_size: u64,
 }
 
 /// 解析 TOML 配置文件并验证
@@ -61,7 +66,14 @@ pub fn parse_toml(file_path: &str) -> Result<Vec<FinalConfig>, String> {
             restic_home_path: cfg.restic_home_path.or(config_file.global_config.restic_home_path.clone()).unwrap_or_default(),
             merge: cfg.merge.unwrap_or_else(|| config_file.global_config.merge.unwrap_or(0)),
             merge_name: cfg.merge_name.unwrap_or_else(|| "merged_backup".to_string()),
+            // 优先使用局部配置，其次全局配置，默认 16
+            pack_size: cfg.pack_size.or(config_file.global_config.pack_size).unwrap_or(16),
         };
+
+        // 验证 pack_size
+        if final_cfg.pack_size < 16 || final_cfg.pack_size > 128 {
+            error_messages.push_str(&format!("[{}]: `pack_size` 必须在 16 到 128 (MiB) 之间，当前值: {}。\n", key_name, final_cfg.pack_size));
+        }
 
         // 智能判断 merge 默认值
         if final_cfg.path.len() > 1 && cfg.merge.is_none() && config_file.global_config.merge.is_none() {

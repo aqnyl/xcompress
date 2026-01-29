@@ -44,6 +44,7 @@ pub fn print_help_info() {
     passwd = "global_password"
     restic_home_path = "D:\\all_my_restic_repos" # 所有仓库的存放根目录
     tag = "daily"
+    pack_size = 128 # 可选: 仓库单元大小(MiB)，范围 16-128，默认 16。在每次执行备份时指定。
 
     # 备份任务配置 (可以有多个)
     [config.project_A] # "project_A" 是任务的唯一标识
