@@ -107,11 +107,16 @@ pub fn handle_restore(restic_exe_path: &str, repo_path_arg: Option<String>) -> R
         .map_err(|e| e.to_string())?;
 
     // 4. 决定输出路径
-    let current_dir = env::current_dir().map_err(|e| e.to_string())?;
-    let default_output_path = current_dir.to_string_lossy();
+    // 智能推断默认恢复路径: 优先使用仓库的上级目录 (模拟原地解压)
+    let default_output_path = if let Some(parent) = repo_path.parent() {
+        parent.to_string_lossy().to_string()
+    } else {
+        env::current_dir().map_err(|e| e.to_string())?.to_string_lossy().to_string()
+    };
+
     let output_path_str: String = Input::with_theme(&theme)
-        .with_prompt("请输入恢复目标路径 (留空则恢复到当前目录)")
-        .default(default_output_path.to_string())
+        .with_prompt("请输入恢复目标路径 (默认恢复到仓库同级目录)")
+        .default(default_output_path)
         .interact_text()
         .map_err(|e| e.to_string())?;
     

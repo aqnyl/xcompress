@@ -182,8 +182,8 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
     let theme = ColorfulTheme::default();
 
     // 1. Get path to back up
-    let backup_path_str = match target_path {
-        Some(path) => path,
+    let backup_path_str = match &target_path {
+        Some(path) => path.clone(),
         None => Input::with_theme(&theme)
             .with_prompt("请输入或拖入要备份的文件/目录路径")
             .validate_with(|input: &String| -> Result<(), &str> {
@@ -193,74 +193,97 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
     };
     let backup_path = Path::new(&backup_path_str);
 
-    // 2. Get base directory for repositories
-    let exe_dir = env::current_dir().map_err(|e| format!("获取当前目录失败: {}", e))?;
-    let default_repo_base = exe_dir.to_string_lossy().to_string();
-    let repo_base_str: String = Input::with_theme(&theme)
-        .with_prompt("请输入 restic 仓库的存放目录 (留空则使用当前程序目录)")
-        .default(default_repo_base)
-        .interact_text()
-        .map_err(|e| e.to_string())?;
-    let repo_base_path = Path::new(&repo_base_str);
+    // --- 智能仓库路径选择 logic ---
+    let mut repo_path_option: Option<PathBuf> = None;
 
-    if !repo_base_path.exists() || !repo_base_path.is_dir() {
-        return Err(format!("仓库存放目录 '{}' 不是一个有效的目录。", repo_base_str));
-    }
+    // 如果是通过拖拽/命令行直接传入路径，进入“快速模式”
+    if target_path.is_some() {
+        let parent_dir = backup_path.parent().unwrap_or(Path::new("."));
+        let dir_name = backup_path.file_name().unwrap_or_default().to_string_lossy();
+        // 默认推荐: 在源目录旁边创建一个 xxx_repo 的目录
+        let suggested_repo_name = format!("{}_repo", dir_name);
+        let suggested_repo_path = parent_dir.join(&suggested_repo_name);
 
-    // 3. Scan for existing repositories
-    println!("\n{} 正在扫描 '{}' 下的 restic 仓库...", style("i").blue(), repo_base_path.display());
-    let mut existing_repos = Vec::new();
-    if let Ok(entries) = fs::read_dir(repo_base_path) {
-        for entry in entries.filter_map(Result::ok) {
-            let path = entry.path();
-            if path.is_dir() && is_restic_repo(&path) {
-                existing_repos.push(path);
-            }
+        println!("\n{}", style("--- 快速备份模式 ---").cyan().bold());
+        
+        let opts = vec![
+            format!("使用默认仓库位置: {} (推荐)", style(suggested_repo_path.display()).green()),
+            "自定义位置 / 选择现有仓库".to_string()
+        ];
+
+        let sel = Select::with_theme(&theme)
+            .with_prompt(format!("检测到源目录 '{}'，请选择备份方案", dir_name))
+            .items(&opts)
+            .default(0)
+            .interact()
+            .unwrap_or(0);
+
+        if sel == 0 {
+            repo_path_option = Some(suggested_repo_path);
         }
     }
 
-    // 4. User selects a repository or chooses to create a new one
-    let mut selection_items: Vec<String> = existing_repos
-        .iter()
-        .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
-        .collect();
-
-    selection_items.sort();
-    let create_new_option = "[ 创建一个新的备份仓库 ]".to_string();
-    selection_items.push(create_new_option.clone());
-
-    let selection = Select::with_theme(&theme)
-        .with_prompt("请选择要使用的备份仓库")
-        .items(&selection_items)
-        .default(0)
-        .interact()
-        .map_err(|e| e.to_string())?;
-
-    let repo_path: PathBuf;
-    // 默认 pack_size，稍后会根据用户交互更新
-    let mut pack_size: u64 = 16; 
-
-    if selection_items[selection] == create_new_option {
-        // 5a. Create a new repository
-        loop {
-            let backup_name: String = Input::with_theme(&theme)
-                .with_prompt("请输入新备份仓库的名称")
-                .interact_text().map_err(|e| e.to_string())?;
-
-            let potential_path = repo_base_path.join(&backup_name);
-
-            if potential_path.exists() {
-                eprintln!("{}", style(format!("错误: 目录 '{}' 已存在，请选择列表中的已有仓库或输入一个新的名称。", potential_path.display())).red());
-                // Loop continues
-            } else {
-                repo_path = potential_path;
-                break;
-            }
-        }
+    // 确定最终的 repo_path (解决编译器重复赋值/未初始化问题)
+    let repo_path = if let Some(path) = repo_path_option {
+        path
     } else {
-        // 5b. Use an existing repository
-        repo_path = repo_base_path.join(&selection_items[selection]);
-    }
+        // --- 传统手动模式：选择 Base Dir -> 扫描/新建 ---
+        let exe_dir = env::current_dir().map_err(|e| format!("获取当前目录失败: {}", e))?;
+        let default_repo_base = exe_dir.to_string_lossy().to_string();
+        let repo_base_str: String = Input::with_theme(&theme)
+            .with_prompt("请输入 restic 仓库的存放目录 (留空则使用当前程序目录)")
+            .default(default_repo_base)
+            .interact_text()
+            .map_err(|e| e.to_string())?;
+        let repo_base_path = Path::new(&repo_base_str);
+
+        if !repo_base_path.exists() || !repo_base_path.is_dir() {
+            return Err(format!("仓库存放目录 '{}' 不是一个有效的目录。", repo_base_str));
+        }
+
+        println!("\n{} 正在扫描 '{}' 下的 restic 仓库...", style("i").blue(), repo_base_path.display());
+        let mut existing_repos = Vec::new();
+        if let Ok(entries) = fs::read_dir(repo_base_path) {
+            for entry in entries.filter_map(Result::ok) {
+                let path = entry.path();
+                if path.is_dir() && is_restic_repo(&path) {
+                    existing_repos.push(path);
+                }
+            }
+        }
+
+        let mut selection_items: Vec<String> = existing_repos
+            .iter()
+            .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
+            .collect();
+
+        selection_items.sort();
+        let create_new_option = "[ 创建一个新的备份仓库 ]".to_string();
+        selection_items.push(create_new_option.clone());
+
+        let selection = Select::with_theme(&theme)
+            .with_prompt("请选择要使用的备份仓库")
+            .items(&selection_items)
+            .default(0)
+            .interact()
+            .map_err(|e| e.to_string())?;
+
+        if selection_items[selection] == create_new_option {
+            loop {
+                let backup_name: String = Input::with_theme(&theme)
+                    .with_prompt("请输入新备份仓库的名称")
+                    .interact_text().map_err(|e| e.to_string())?;
+                let potential_path = repo_base_path.join(&backup_name);
+                if potential_path.exists() {
+                    eprintln!("{}", style(format!("错误: 目录 '{}' 已存在。", potential_path.display())).red());
+                } else {
+                    break potential_path;
+                }
+            }
+        } else {
+            repo_base_path.join(&selection_items[selection])
+        }
+    };
 
     // 6. Get password and confirm
     let password = Password::with_theme(&theme)
@@ -268,10 +291,10 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
         .with_confirmation("请再次输入密码确认", "两次输入的密码不匹配。")
         .interact().map_err(|e| e.to_string())?;
 
-    // 7. 每次备份前询问 Pack Size
+    // 7. 每次备份前询问 Pack Size (默认值修改为 128)
     let size_opts = vec![
-        "默认 (16 MiB) - 适用于大多数情况",
-        "最大 (128 MiB) - 适用于大文件备份",
+        "最大 (128 MiB) - 文件少易上传网盘 / 压缩率最高 / 推荐 TB 级数据",
+        "默认 (16 MiB) - 文件碎片较多 / 本地性能最高 / 压缩率中等",
         "自定义大小 (16-128 MiB)"
     ];
     let size_selection = Select::with_theme(&theme)
@@ -281,18 +304,18 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
         .interact()
         .map_err(|e| e.to_string())?;
 
-    pack_size = match size_selection {
-        0 => 16,
-        1 => 128,
+    let pack_size = match size_selection {
+        0 => 128,
+        1 => 16,
         2 => Input::with_theme(&theme)
             .with_prompt("请输入 Pack Size (MiB)")
-            .default(16)
+            .default(128)
             .validate_with(|input: &u64| -> Result<(), &str> {
                 if *input >= 16 && *input <= 128 { Ok(()) } else { Err("范围必须在 16 到 128 之间") }
             })
             .interact_text()
             .map_err(|e| e.to_string())?,
-        _ => 16,
+        _ => 128,
     };
 
     println!("\n{} 准备将 '{}' 备份到 '{}'...", style("i").blue(), backup_path.display(), repo_path.display());
@@ -302,7 +325,7 @@ fn run_interactive_backup(restic_exe_path: &str, target_path: Option<String>) ->
         return Ok(());
     }
 
-    // 7. Execute backup
+    // 8. Execute backup
     match execute_backup(restic_exe_path, &repo_path, backup_path, &password, "", pack_size) {
         Ok(msg) => {
             println!("{}\n{}", style("✔ 交互式备份成功!").green().bold(), msg);

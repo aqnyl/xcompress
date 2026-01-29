@@ -66,8 +66,8 @@ pub fn parse_toml(file_path: &str) -> Result<Vec<FinalConfig>, String> {
             restic_home_path: cfg.restic_home_path.or(config_file.global_config.restic_home_path.clone()).unwrap_or_default(),
             merge: cfg.merge.unwrap_or_else(|| config_file.global_config.merge.unwrap_or(0)),
             merge_name: cfg.merge_name.unwrap_or_else(|| "merged_backup".to_string()),
-            // 优先使用局部配置，其次全局配置，默认 16
-            pack_size: cfg.pack_size.or(config_file.global_config.pack_size).unwrap_or(16),
+            // 优先使用局部配置，其次全局配置，默认 128 (优化大文件性能)
+            pack_size: cfg.pack_size.or(config_file.global_config.pack_size).unwrap_or(128),
         };
 
         // 验证 pack_size
